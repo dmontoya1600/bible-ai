@@ -1,0 +1,162 @@
+import requests
+import psycopg2
+from psycopg2 import sql
+import time
+
+# Connect to your postgres DB
+conn = psycopg2.connect("dbname=bible_db user=dmontoya")
+
+# Open a cursor to perform database operations
+cur = conn.cursor()
+
+# Get the books of the Bible
+url = "https://bible-api.com/"
+books = [
+    "Genesis",
+    "Exodus",
+    "Leviticus",
+    "Numbers",
+    "Deuteronomy",
+    "Joshua",
+    "Judges",
+    "Ruth",
+    "1 Samuel",
+    "2 Samuel",
+    "1 Kings",
+    "2 Kings",
+    "1 Chronicles",
+    "2 Chronicles",
+    "Ezra",
+    "Nehemiah",
+    "Esther",
+    "Job",
+    "Psalms",
+    "Proverbs",
+    "Ecclesiastes",
+    "Song of Solomon",
+    "Isaiah",
+    "Jeremiah",
+    "Lamentations",
+    "Ezekiel",
+    "Daniel",
+    "Hosea",
+    "Joel",
+    "Amos",
+    "Obadiah",
+    "Jonah",
+    "Micah",
+    "Nahum",
+    "Habakkuk",
+    "Zephaniah",
+    "Haggai",
+    "Zechariah",
+    "Malachi",
+    "Matthew",
+    "Mark",
+    "Luke",
+    "John",
+    "Acts",
+    "Romans",
+    "1 Corinthians",
+    "2 Corinthians",
+    "Galatians",
+    "Ephesians",
+    "Philippians",
+    "Colossians",
+    "1 Thessalonians",
+    "2 Thessalonians",
+    "1 Timothy",
+    "2 Timothy",
+    "Titus",
+    "Philemon",
+    "Hebrews",
+    "James",
+    "1 Peter",
+    "2 Peter",
+    "1 John",
+    "2 John",
+    "3 John",
+    "Jude",
+    "Revelation"
+]
+
+def try_again_function():
+    response = requests.get(f"{url}{book}+{chapter_number}")
+    data = response.json()
+    if 'verses' not in data:
+        print(f"No verses found for {book} chapter {chapter_number}")
+        print("Data returned this from API:", data)
+        print("Used URL:", f"{url}{book}+{chapter_number}")
+        return False
+    
+    return data
+
+failed_try_again = False
+
+for book in books:
+    chapter_number = 1
+    if failed_try_again:
+        print('Failed Try Again... aborting')
+        break
+    while True:
+        print(f"Getting {book} chapter {chapter_number}")
+        time.sleep(.5)
+        # Get the book from the API
+        response = requests.get(f"{url}{book}+{chapter_number}")
+        
+        # Check if the response contains valid JSON
+        try:
+            data = response.json()
+            if 'verses' not in data:
+                print(f"No verses found for {book} chapter {chapter_number}")
+                print("Data returned this from API:", data)
+                print("Used URL:", f"{url}{book}+{chapter_number}")
+                break
+        except ValueError:
+            # Invalid JSON response; we've likely requested a non-existent chapter
+            print(f"No verses found for {book} chapter {chapter_number}")
+            print(f"Response from API: {response.text}")
+            if (response.text == "Retry later\n"):
+                print("API is throttling requests. Sleeping 20 seconds.")
+                time.sleep(20)
+                try:
+                    data = try_again_function()
+                    if data is False:
+                        break
+                except ValueError:
+                    print('Tried again and failed.')
+                    failed_try_again = True
+                    break
+            else:
+                break
+
+        # Check if the book exists in the database, if not insert it
+        cur.execute("SELECT id FROM bible_app_book WHERE name = %s", (data['verses'][0]['book_name'],))
+        book_id = cur.fetchone()
+
+        if book_id is None:
+            cur.execute("INSERT INTO bible_app_book (name) VALUES (%s) RETURNING id", (data['verses'][0]['book_name'],))
+            book_id = cur.fetchone()[0]
+            conn.commit()
+
+        for verse in data['verses']:
+            # Check if the chapter exists in the database, if not insert it
+            cur.execute("SELECT id FROM bible_app_chapter WHERE number = %s AND book_id = %s", (verse['chapter'], book_id))
+            chapter_id = cur.fetchone()
+
+            if chapter_id is None:
+                cur.execute("INSERT INTO bible_app_chapter (number, book_id) VALUES (%s, %s) RETURNING id", (verse['chapter'], book_id))
+                chapter_id = cur.fetchone()[0]
+                conn.commit()
+
+            # Insert the verse into the database
+            cur.execute("INSERT INTO bible_app_verse (number, text, chapter_id) VALUES (%s, %s, %s)", (verse['verse'], verse['text'], chapter_id))
+            conn.commit()
+
+        # Increment the chapter number for the next API request
+        chapter_number += 1
+    print(f"Finished {book}")
+print("Done!")
+# Close communication with the database
+cur.close()
+conn.close()
